@@ -12,44 +12,74 @@ This is a nice example where sometimes AIS has better reception than ADS-B. The 
 
 ## Usage
 ```
-AIS2ADSB v0.14- see https://github.com/jvde-github/ais2adsb
-Usage: (python) ais2adsb.py <AIS UDP address> <AIS UDP IP> <AIS UDP port> <SBS TCP IP> <SBS TCP port> <options>
-Options:
-	FILE xxxx        : read mmsi <-> ICAO mapping from file xxxx
-	SAR on/off       : include SAR aircraft in sendout
-	SHIPS on/off     : include ships in sendout
-	CALLSIGN on/off  : include generated callsigns in sendout
-	PRINT on/off     : print mmsi/ICAO dictionary
-	SAVE xxxx        : save mmsi/ICAO dictionary to file xxxx
+usage: ais2adsb [-h] [--sar | --no-sar] [--ships | --no-ships]
+                [--callsign | --no-callsign] [--print-dict]
+                [--map-file MAP_FILE] [--save-file SAVE_FILE]
+                [--metrics-port METRICS_PORT] [--no-default-map] [--version]
+                udp_ip udp_port sbs_ip sbs_port
 ```
-This is the minimal command line:
+Minimal invocation:
 ```
 python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003
 ```
-which reads AIS messages coming in on a computer with IP address `192.168.1.235` and port 4002 and sends it to VRS running at `192.168.1.239` port 30003. Below some more instructions to set up.
+reads AIS messages on `192.168.1.235:4002/udp` and forwards converted SBS to VRS at `192.168.1.239:30003/tcp`. Defaults: `--sar` on, `--ships` off, `--callsign` on.
 
-As a side note, if your receiver is AIS-catcher, you can send it to ais2adsb using the `-u` option:
+If your receiver is AIS-catcher, send to ais2adsb via its `-u` option:
 ```
 AIS-catcher -u 192.168.1.235 4002 .....
 ```
 
-There are only a few options. The `FILE` setting will read in a file with a Python Dictionary that maps MMSI numbers to 24-bit ICAO numbers. The Dictionary functionality allows the user to let the program use a pre-defined mapping.  If not provided ais2adsb will auto generate ICAO numbers of the form `FXXXXX`  based on the MMSI number or from a default dictionary embedded in the program. The `PRINT on` option will trigger dumping the Dictionary to stderr periodically (so it can be put back in via the FILE option if desired)
+The `--map-file` option reads a Python-dict-literal mapping of MMSI → 24-bit ICAO from disk; `--save-file` writes the live map back periodically and on exit. A bundled default mapping ships in `data/icao_map.dict` and loads automatically (disable with `--no-default-map`). For unknown MMSIs ais2adsb auto-generates ICAO codes of the form `0xFxxxxx` derived from the MMSI's lower 20 bits.
 
-The SAR setting (on/off, default is on) will instruct the program to also include SAR aircraft in the sendout. By default only SAR Aircraft broadcasting AIS message type 9 are included. The SHIPS setting (on/off, default is off) will instruct the program to also include vessels in the sendout. A callsign based on MMSI will be included by default, unless the option `CALLSIGN off` is given. A full example is:
+A full example, also exposing Prometheus metrics on port 8080:
 ```
-python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 SHIPS on FILE mapping.dict PRINT on CALLSIGN off
+python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 \
+    --ships --map-file mapping.dict --print-dict --no-callsign --metrics-port 8080
 ```
+
+## Docker
+
+The included `docker-compose.yml` configures the container via environment variables:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SBS_TARGET_HOST` | _required_ | TCP host for SBS output |
+| `SBS_TARGET_PORT` | _required_ | TCP port for SBS output |
+| `UPD_IN_PORT` | `9000` | UDP port the container listens on for NMEA |
+| `INCLUDE_SAR` | _on_ | `true`/`false` — include SAR aircraft |
+| `INCLUDE_SHIPS` | _off_ | `true`/`false` — include vessels |
+| `CALLSIGN` | _on_ | `true`/`false` — emit generated callsigns |
+| `METRICS_PORT` | _disabled_ | exposes `/metrics` (Prometheus) and `/health` |
+
+State (the live MMSI→ICAO map) persists to `/data/ais2adsb.map`.
+
+### Metrics and health
+
+When `--metrics-port`/`METRICS_PORT` is set, ais2adsb starts an HTTP server exposing two endpoints:
+
+`GET /metrics` — Prometheus text format (version 0.0.4):
+
+| Metric | Type | Description |
+|---|---|---|
+| `ais2adsb_messages_received_total` | counter | UDP datagrams received |
+| `ais2adsb_messages_decoded_total` | counter | Messages decoded by aiscat (multipart reassembled) |
+| `ais2adsb_messages_sent_total` | counter | SBS position records sent upstream |
+| `ais2adsb_tcp_reconnects_total` | counter | Successful TCP connections to SBS server (incl. initial) |
+| `ais2adsb_last_message_timestamp_seconds` | gauge | Unix timestamp of the most recent UDP receive |
+| `ais2adsb_last_send_timestamp_seconds` | gauge | Unix timestamp of the most recent SBS send |
+| `ais2adsb_unique_icaos` | gauge | Size of the active MMSI→ICAO map |
+| `ais2adsb_connected` | gauge | `1` if currently connected to the SBS server, else `0` |
+
+`GET /health` — `200 ok` if connected to the SBS server *and* a UDP message was received in the last 300 s. `503 degraded` otherwise. Use this for container healthchecks or load-balancer probes.
 
 ## Installation
 
-For Windows users who do not have Python installed there is a package available in the Release sections created via [pyinstaller](https://pyinstaller.org/en/stable/). 
-Usually it is simplest though to install Python3 and pyais (if not already installed):
+For Windows users who do not have Python installed there is a package available in the Releases section, built via [pyinstaller](https://pyinstaller.org/en/stable/).
+
+For other platforms, the simplest path is Python 3.9+ with [aiscat](https://pypi.org/project/aiscat/):
 ```
 sudo apt install python3 pip
-pip3 install pyais
-```
-Then download the current package and enter the directory:
-```
+pip3 install aiscat
 git clone https://github.com/jvde-github/ais2adsb.git
 cd ais2adsb
 ```
@@ -57,33 +87,90 @@ cd ais2adsb
 Set up for example VRS so that it can receive BaseStation messages as a TCP server:
 <img width="659" alt="image" src="https://user-images.githubusercontent.com/52420030/219872223-2d199476-94e4-467c-9943-3cab66e48c4a.png">
 
-The NMEA input should be send over UDP. Most AIS software including AIS-catcher can easily be set up to achieve this, see above. For now we will assume you will have a stream of messages send to the local computer (say `192.168.1.235` at port `4002`). To create BaseStation messages and send to the server use the following command:
+The NMEA input should be sent over UDP. Most AIS software including AIS-catcher can easily be set up to achieve this. Assuming a stream is arriving on `192.168.1.235:4002`:
 ```
 python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003
 ```
-where `192.168.1.239` is the PC running VRS.
+where `192.168.1.239` is the PC running VRS. This forwards SAR aircraft only by default. To include ship positions:
+```
+python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 --ships
+```
 
-This will only pass on SAR aircraft messages. For testing it could be interesting to pass on ship positions as well:
-```
-python3 ./ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 SHIPS on
-```
 You will see in the VRS main window that the client has connected and hopefully some messages have been sent as well:
 <img width="552" alt="image" src="https://user-images.githubusercontent.com/52420030/219874149-dd0458dd-d804-4fde-9f2e-cf7812f58d3c.png">
 
 The final output in the webinterface of VRS will look something like:
 <img width="1232" alt="image" src="https://user-images.githubusercontent.com/52420030/219868349-5b1dc1e5-33b1-48a0-96a4-9ad4bb49134f.png">
 
-## Default dictionary
+## ICAO mapping
 
-The default MMSI to ICAO mapping is shown below which is kindly provided by jonboy1081 and flygfantast. This is also the input format when reading in a dictionary from file: 
+A bundled default mapping (~280 entries, kindly provided by jonboy1081 and flygfantast) ships in [`data/icao_map.dict`](data/icao_map.dict) and is loaded automatically. Pass `--no-default-map` to skip it. Custom mappings via `--map-file` use the same format — a Python-dict literal of `{mmsi: icao_int}`:
+```python
+{
+    111232512: 0x406C79,
+    111232511: 0x406C82,
+    250002898: 0x4CA98D,
+    # ...
+}
 ```
-{ 111232512:0x406C79, 111232511:0x406C82, 111232513:0x406C8E, 111232516:0x406D2C, 111232517:0x406D2D, 111232523:0x406DDB, 111232524:0x406DDC, 111232529:0x406F8B, 111232526:0x406EE7,
-            111232528:0x406F2D, 111232518:0x406D21, 111232533:0x406DE5, 111232522:0x406DE6, 111232527:0x406DE7, 111232525:0x406DE8, 111232534:0x406DE9, 111232535:0x406DEA,111232537:0x406DEB,
-            111232539:0x406DED, 111232531:0x43ECF4, 250002898:0x4CA98D, 250002897:0x4CA98F, 250002902:0x4CA98B, 250004879:0x4CACA4, 250002901:0x4CA98C, 111232519:0x48644B,111232538:0x485F8F,
-            111503003:0x4860B1, 111232509:0x47BFE4, 111265103:0x4AB423, 111224519:0x346105, 111503031:0x7C7590, 111257008:0x47812B, 111257014:0x478131, 111247506:0x32001B,
-            111211507:0x3DF1AD, 111224518:0x34220E, 11120554:0x44B918, 111224504:0x343318, 831582013:0x33FD3F, 111224522:0x346401 }
+Unknown MMSIs are auto-assigned ICAO codes of the form `0xFxxxxx` derived from the MMSI's lower 20 bits, with collision-avoidance against existing entries. Use `--save-file PATH` to persist the live (default + auto-assigned) map to disk; the same path can be reloaded next run via `--map-file PATH`.
+
+## Development
+
 ```
-## To do
-- Fine tuning
-- Integrate into other software
-- ....
+python3 -m pip install aiscat
+python3 -m unittest discover tests
+```
+
+CI runs the unit tests on every push/PR ([`.github/workflows/python-ci.yml`](.github/workflows/python-ci.yml)). Docker images are built for `linux/amd64`, `linux/arm64`, and `linux/arm/v7` ([`.github/workflows/docker-image.yml`](.github/workflows/docker-image.yml)) and published to GHCR — armv7 covers Pi 1/2/3 in 32-bit mode and similar boards.
+
+## Changes
+
+Recent substantive changes (vs. earlier `0.14`-era versions):
+
+- **Decoder** — switched from `pyais` to [`aiscat`](https://pypi.org/project/aiscat/). Multipart AIVDM groups are now reassembled (previously raised and were dropped). AIS sentinel values for "speed not available" are correctly mapped to `None` instead of being passed through as `102.3` knots.
+- **Altitude bug fix (SAR)** — AIS type 9 altitude is in metres; the SBS BaseStation field is feet. Earlier versions emitted the raw metric value, plotting helicopters at ~30 % of their true altitude in VRS. Now converted with the `4095 = N/A` sentinel handled.
+- **Position sanity** — lat/lon are range-checked (`-90..90`, `-180..180`) so AIS sentinels (`lat=91`, `lon=181`) can no longer bleed through to ADS-B viewers as ghost positions at the North Pole.
+- **Graceful shutdown** — `SIGTERM` (used by `docker stop`) now triggers the same dictionary-save path as `SIGINT`.
+- **CLI** — replaced the positional `SHIPS on` style with `argparse`. New flags: `--ships/--no-ships`, `--sar/--no-sar`, `--callsign/--no-callsign`, `--map-file`, `--save-file`, `--print-dict`, `--metrics-port`, `--no-default-map`, `--version`.
+- **ICAO mapping** — extracted from the script body into [`data/icao_map.dict`](data/icao_map.dict).
+- **Metrics / health** — see *Metrics and health* above.
+- **Docker** — base image swapped to `python:3.13-slim` (~215 MB). Multi-arch build covers amd64 / arm64 / armv7.
+- **Tests** — unit tests under `tests/` cover the alt conversion (incl. sentinel), ICAO generation, filter logic, CLI parsing, and `sendBaseStation` rejection of bogus positions.
+
+### Migrating from older versions
+
+**If you run the script directly (Python / pyinstaller / launch scripts):**
+
+1. Replace `pyais` with `aiscat`:
+   ```
+   pip3 uninstall pyais        # optional, can coexist
+   pip3 install aiscat
+   ```
+2. Update the command line — the old positional `KEY value` style was removed in favour of `argparse`. Translation table:
+
+   | Old | New |
+   |---|---|
+   | `SHIPS on` / `SHIPS off` | `--ships` / `--no-ships` |
+   | `SAR on` / `SAR off` | `--sar` / `--no-sar` |
+   | `CALLSIGN on` / `CALLSIGN off` | `--callsign` / `--no-callsign` |
+   | `PRINT on` | `--print-dict` |
+   | `FILE path.dict` | `--map-file path.dict` |
+   | `SAVE path.dict` | `--save-file path.dict` |
+
+   So:
+   ```
+   # Before
+   python3 ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 SHIPS on FILE map.dict CALLSIGN off
+   # After
+   python3 ais2adsb.py 192.168.1.235 4002 192.168.1.239 30003 --ships --map-file map.dict --no-callsign
+   ```
+3. The saved-dict file format is unchanged — your existing `*.dict` files keep working with `--map-file`.
+4. SBS output bytes are identical to the previous version for any message both libraries handled. You should not need to reconfigure VRS.
+5. **One-off cleanup if you previously saw weird positions:** if you noticed AIS targets plotted near the North Pole or SAR helicopters at impossibly low altitudes, those were the bugs fixed in this release — no action needed, just expect cleaner output going forward.
+
+**If you run the Docker image (`ghcr.io/jvde-github/ais2adsb:edge`):**
+
+The image tag is unchanged. The `docker-compose.yml` env-var names (`SBS_TARGET_HOST`, `SBS_TARGET_PORT`, `INCLUDE_SHIPS`, `CALLSIGN`, `UPD_IN_PORT`) are unchanged and continue to work — just `docker pull` the new image. Two optional additions: `INCLUDE_SAR` (defaults to on) and `METRICS_PORT` (off unless set). The `/data` volume layout is unchanged, so your persistent `ais2adsb.map` carries over.
+
+**If you build from the Dockerfile yourself:** the base image swapped from `ghcr.io/sdr-enthusiasts/docker-baseimage:python` to `python:3.13-slim`. The `rootfs/` directory was removed (s6 service files no longer needed); behaviour is now provided by [`docker-entrypoint.sh`](docker-entrypoint.sh).

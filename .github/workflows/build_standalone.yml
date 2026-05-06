@@ -15,9 +15,9 @@ jobs:
       with:
         python-version: 3.11
 
-    - run: pip install pyais pyinstaller
-    - run: pyinstaller ais2adsb.py
-    - run: ./dist/ais2adsb/ais2adsb
+    - run: pip install aiscat pyinstaller
+    - run: pyinstaller --collect-all aiscat ais2adsb.py
+    - run: ./dist/ais2adsb/ais2adsb --help
     - uses: actions/upload-artifact@v3
       with:
         name: "AIS2ADSB ${{matrix.os}}"
